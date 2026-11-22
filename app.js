@@ -68,12 +68,40 @@
   }
   function migrate(d) {
     const def = defaults();
+    d = d && typeof d === 'object' ? d : {};
     const s = Object.assign({}, def.settings, d.settings || {});
     s.services = Object.assign({}, def.settings.services, (d.settings && d.settings.services) || {});
-    return { v: 1, settings: s, customers: Array.isArray(d.customers) ? d.customers : [], appts: Array.isArray(d.appts) ? d.appts : [] };
+    Object.keys(s.services).forEach((k) => {
+      const v = s.services[k];
+      if (!v || typeof v.name !== 'string' || !(Number(v.dur) > 0)) s.services[k] = def.settings.services[k] || { name: k, dur: 30 };
+      else v.dur = Math.round(Number(v.dur));
+    });
+    if (!s.services[s.defaultService]) s.defaultService = 'sacsakal';
+    if (!Array.isArray(s.workDays)) s.workDays = def.settings.workDays.slice();
+    if (!/^\d{2}:\d{2}$/.test(s.start)) s.start = def.settings.start;
+    if (!/^\d{2}:\d{2}$/.test(s.end)) s.end = def.settings.end;
+    ['msgRemind', 'msgConfirm', 'msgMiss'].forEach((k) => { if (typeof s[k] !== 'string') s[k] = def.settings[k]; });
+    const customers = (Array.isArray(d.customers) ? d.customers : [])
+      .filter((c) => c && c.id && typeof c.name === 'string' && c.name.trim())
+      .map((c) => Object.assign({}, c, { phone: String(c.phone || ''), note: String(c.note || '') }));
+    const appts = (Array.isArray(d.appts) ? d.appts : [])
+      .filter((a) => a && a.id && a.customerId && /^\d{4}-\d{2}-\d{2}$/.test(a.date) && /^\d{2}:\d{2}$/.test(a.time))
+      .map((a) => Object.assign({ status: 'planned' }, a, { service: s.services[a.service] ? a.service : s.defaultService }));
+    return { v: 1, settings: s, customers, appts };
   }
+  let loadProblem = false;
   function load() {
-    try { const s = localStorage.getItem(KEY); if (s) return migrate(JSON.parse(s)); } catch (e) { /* bozuksa sıfırdan */ }
+    let raw = null;
+    try { raw = localStorage.getItem(KEY); } catch (e) { loadProblem = true; }
+    if (raw) {
+      try { return migrate(JSON.parse(raw)); }
+      catch (e) {
+        // Okunamayan veriyi asla silme: ayrı bir yere kopyala
+        loadProblem = true;
+        try { localStorage.setItem(KEY + '-bozuk-' + Date.now(), raw); } catch (x) { /* */ }
+        const d = defaults(); d.settings.welcomed = true; d.customers = []; return d;
+      }
+    }
     return defaults();
   }
   let db = load();
@@ -234,6 +262,7 @@
     $('#toast').classList.remove('show');
     const root = $('#sheet-root');
     root.innerHTML = `<div class="backdrop" data-close></div><div class="sheet ${opts.cls || ''}" role="dialog" aria-modal="true"><div class="grab"></div>${html}</div>`;
+    root.classList.remove('closing');
     root.classList.add('open');
     void root.offsetWidth;
     root.classList.add('show');
@@ -246,7 +275,8 @@
     const fn = sheetClose; sheetClose = null;
     if (fn) fn();
     root.classList.remove('show');
-    const done = () => { if (!root.classList.contains('show')) { root.innerHTML = ''; root.classList.remove('open'); } };
+    root.classList.add('closing');
+    const done = () => { if (!root.classList.contains('show')) { root.innerHTML = ''; root.classList.remove('open', 'closing'); } if (window.__pendingReload) window.__pendingReload(); };
     if (immediate) done(); else setTimeout(done, 260);
   }
   const sheetOpen = () => $('#sheet-root').classList.contains('open');
@@ -257,10 +287,16 @@
 
   function render() {
     const v = $('#view');
-    if (ui.view === 'customer' && !cust(ui.cid)) ui.view = 'customers';
-    if (ui.view === 'day') v.innerHTML = dayView();
-    else if (ui.view === 'customers') v.innerHTML = customersView();
-    else v.innerHTML = customerView(ui.cid);
+    try {
+      if (ui.view === 'customer' && !cust(ui.cid)) ui.view = 'customers';
+      if (ui.view === 'day') v.innerHTML = dayView();
+      else if (ui.view === 'customers') v.innerHTML = customersView();
+      else v.innerHTML = customerView(ui.cid);
+    } catch (err) {
+      console.error(err);
+      ui.view = 'day'; ui.day = todayStr();
+      v.innerHTML = `<div class="empty-card" style="margin:40px 12px"><p><b>Bir şey ters gitti.</b></p><p class="muted">Kayıtların yerinde. Aşağıdaki düğmeye dokun.</p><p><button class="btn-navy" onclick="location.reload()">Yeniden aç</button></p></div>`;
+    }
     $('#nav-day').classList.toggle('on', ui.view === 'day');
     $('#nav-cust').classList.toggle('on', ui.view !== 'day');
     const q = $('#q');
@@ -278,9 +314,9 @@
 
   function dayView() {
     const d = ui.day, t = todayStr();
-    const list = apptsOn(d), gaps = freeGaps(d);
     const wd = parseYmd(d).getDay();
     const closed = !db.settings.workDays.includes(wd);
+    const list = apptsOn(d), gaps = closed ? [] : freeGaps(d);
     const mon = addDays(d, -((wd + 6) % 7));
     const days = [...Array(7)].map((_, i) => addDays(mon, i));
     const counts = {};
@@ -451,7 +487,7 @@
       if (!fs.candidates || !fs.candidates.length || fs.picked) { el.innerHTML = ''; return; }
       const cs = fs.candidates.map(cust).filter(Boolean);
       const newName = fs.name && !cs.some((c) => trl(c.name) === trl(fs.name)) ? fs.name : null;
-      el.innerHTML = `<div class="cands"><p>${fs.ambiguous ? 'Hangisi?' : 'Kayıtlı müşteri mi, yeni mi?'}</p><div class="chips">
+      el.innerHTML = `<div class="cands"><p>${fs.fuzzy ? 'Bunu mu demek istedin?' : fs.ambiguous ? 'Hangisi?' : 'Kayıtlı müşteri mi, yeni mi?'}</p><div class="chips">
         ${cs.map((c) => `<button class="chip" data-pick="${c.id}">${esc(c.name)}</button>`).join('')}
         ${newName ? `<button class="chip ghost" data-pick="new">${I.plus} Yeni: ${esc(newName)}</button>` : ''}</div></div>`;
       $$('[data-pick]', el).forEach((b) => b.onclick = () => {
@@ -789,6 +825,24 @@
     startListen();
   }
 
+  // Yanlış duyulan isimde (Ahmed / Ahmet, Kan / Kaan) mükerrer müşteri oluşmasın
+  function lev(a, b) {
+    if (Math.abs(a.length - b.length) > 2) return 9;
+    const d = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i++) {
+      let prev = d[0]; d[0] = i;
+      for (let j = 1; j <= b.length; j++) { const tmp = d[j]; d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = tmp; }
+    }
+    return d[b.length];
+  }
+  function similarIds(name) {
+    const f = trl(firstName(name)).replace(/[^a-zçğıöşü]/g, '');
+    if (f.length < 3) return [];
+    const max = f.length >= 7 ? 2 : 1;
+    return db.customers.filter((c) => { const cf = trl(firstName(c.name)); return cf !== f && Math.min(cf.length, f.length) >= 3 && lev(cf, f) <= max; })
+      .slice(0, 4).map((c) => c.id);
+  }
+
   function handleText(text) {
     const r = N.parse(text, { now: new Date(), customers: db.customers, appts: db.appts });
     showResult(r);
@@ -812,6 +866,10 @@
     const area = $('#mic-area');
     if (!area) return;
     const sheet = area.closest('.sheet'); if (sheet) sheet.scrollTop = 0;
+    if (!r.customerId && r.name && !(r.candidates && r.candidates.length) && ['create', 'cancel', 'noshow', 'note', 'query'].includes(r.intent)) {
+      const sim = similarIds(r.name);
+      if (sim.length) { r.candidates = sim; r.fuzzy = true; }
+    }
     if (r.intent === 'create') return showCreate(area, r);
     if (r.intent === 'move') return showMove(area, r);
     if (r.intent === 'cancel' || r.intent === 'noshow') return showCancel(area, r);
@@ -824,7 +882,7 @@
     const fs = {
       mode: 'voice', id: null, customerId: r.customerId, name: r.customerId ? custName(r.customerId) : (r.name || ''),
       phone: '', date: r.date, time: r.time || '', service: r.service && r.service !== 'default' ? r.service : db.settings.defaultService,
-      candidates: r.candidates || [], ambiguous: !!r.ambiguous, picked: false, heard: r.text,
+      candidates: r.candidates || [], ambiguous: !!r.ambiguous, fuzzy: !!r.fuzzy, picked: false, heard: r.text,
     };
     fs.compact = !!(fs.time && fs.name && !fs.candidates.length);
     area.innerHTML = apptFormHTML(fs);
@@ -852,7 +910,7 @@
     const ns = r.intent === 'noshow';
     if (!r.customerId) {
       if (r.candidates && r.candidates.length) {
-        return chooser(area, r, 'Hangisi?', r.candidates, (id) => {
+        return chooser(area, r, r.fuzzy ? 'Bunu mu demek istedin?' : 'Hangisi?', r.candidates, (id) => {
           const list = N.upcomingFor(id, db.appts, new Date(), ns ? todayStr() : r.date);
           showCancel(area, Object.assign({}, r, { customerId: id, candidates: [], apptId: list.length ? (ns ? list[list.length - 1].id : list[0].id) : null }));
         });
@@ -876,7 +934,7 @@
     if (!r.note) return message(area, r, 'Notu duyamadım', 'Şöyle söyle: <i>“Ahmet’e not al: kenarlar 2 numara”</i>');
     if (!r.customerId) {
       if (r.candidates && r.candidates.length) {
-        return chooser(area, r, 'Kimin notu?', r.candidates, (id) => {
+        return chooser(area, r, r.fuzzy ? 'Bunu mu demek istedin?' : 'Kimin notu?', r.candidates, (id) => {
           if (id === 'new') return showNote(area, Object.assign({}, r, { candidates: [], newOk: true }));
           showNote(area, Object.assign({}, r, { customerId: id, candidates: [] }));
         }, r.name);
@@ -906,7 +964,7 @@
 
   function showQuery(area, r) {
     if ((r.kind === 'customer' || r.kind === 'last') && !r.customerId && r.candidates && r.candidates.length) {
-      return chooser(area, r, 'Hangisi?', r.candidates, (id) => showQuery(area, Object.assign({}, r, { customerId: id, candidates: [] })));
+      return chooser(area, r, r.fuzzy ? 'Bunu mu demek istedin?' : 'Hangisi?', r.candidates, (id) => showQuery(area, Object.assign({}, r, { customerId: id, candidates: [] })));
     }
     if (r.kind === 'customer' || r.kind === 'last') {
       if (!r.customerId) return message(area, r, 'Müşteri bulunamadı', r.name ? `“${esc(r.name)}” adında kayıtlı bir müşteri yok.` : 'Kimi sorduğunu anlayamadım.');
@@ -973,7 +1031,7 @@
         <button class="btn-ghost full" data-action="show-welcome">${I.heart} Karşılama ekranını göster</button>
         <button class="btn-danger-text" data-action="wipe">${I.trash} Tüm kayıtları sil</button>
       </div>
-      <p class="footer-note">Osman’dan Sezgin abiye ♥<br><small>sürüm 2</small></p>`, {
+      <p class="footer-note">Osman’dan Sezgin abiye ♥<br><small>sürüm 3</small></p>`, {
       onMount: (sh) => {
         $('#s-start', sh).onchange = (e) => { if (e.target.value) { s.start = e.target.value.slice(0, 5); save(); render(); } };
         $('#s-end', sh).onchange = (e) => { if (e.target.value) { s.end = e.target.value.slice(0, 5); save(); render(); } };
@@ -1048,9 +1106,9 @@
 
   function renderInstallBar() {
     const el = $('#install-bar');
-    const show = isMobile() && !isStandalone() && db.settings.welcomed && !installDismissed && !sheetOpen();
+    const show = isMobile() && !isStandalone() && !installDismissed && !sheetOpen() && !$('#welcome').classList.contains('show');
     document.body.classList.toggle('has-ibar', show);
-    el.innerHTML = show ? `<div class="ibar"><button class="go" data-action="install-help">${I.share}<span><b>Ana ekrana ekle</b> · uygulama gibi açılsın</span></button><button class="xx" data-action="dismiss-install" aria-label="Kapat">${I.x}</button></div>` : '';
+    el.innerHTML = show ? `<div class="ibar"><button class="go" data-action="install-help">${I.share}<span><b>Deneme modu.</b> Kayıtlar ana ekrandaki uygulamada tutulur, buradakiler oraya geçmez.</span></button><button class="xx" data-action="dismiss-install" aria-label="Kapat">${I.x}</button></div>` : '';
   }
   function openInstallHelp() {
     openSheet(`<div class="sheet-head"><h2>Ana ekrana ekle</h2><button class="x" data-close aria-label="Kapat">${I.x}</button></div>
@@ -1062,6 +1120,31 @@
       </ol>
       <p class="hint">Paylaş düğmesini göremiyorsan önce linki <b>Safari’de</b> aç. Bundan sonra hep ana ekrandaki ikondan aç: Safari’deki sayfa ile ikondaki uygulamanın kayıtları ayrı tutulur.</p>
       <button class="btn-navy big" data-close>Anladım</button>`);
+  }
+  let tryHere = false;
+  try { tryHere = sessionStorage.getItem('try-here') === '1'; } catch (e) { /* */ }
+  function showGate() {
+    const w = $('#welcome');
+    w.innerHTML = `<div class="wl-inner">
+      <div class="wl-pole" aria-hidden="true"><span></span></div>
+      <p class="wl-hi">Sezgin abi,</p>
+      <p class="wl-msg">yıllardır emeğin için teşekkürler.<br>Hayırlı olsun!</p>
+      <p class="wl-sign">– Osman</p>
+      <div class="gate"><p class="gate-t">Önce telefonuna kuralım</p>
+        <ol class="steps">
+          <li><span class="num">1</span><div>Safari’de alttaki <b>Paylaş</b> düğmesine dokun <span class="ico">${I.share}</span></div></li>
+          <li><span class="num">2</span><div>Listeyi kaydırıp <b>Ana Ekrana Ekle</b>’yi seç</div></li>
+          <li><span class="num">3</span><div><b>Ekle</b>’ye dokun, sonra ana ekrandaki <b>Sezgin Usta</b> ikonundan aç</div></li>
+        </ol>
+        <p class="hint">Paylaş düğmesi yoksa linki önce <b>Safari’de</b> aç (sağ üstteki menüden “Safari’de Aç”).</p>
+      </div>
+      <button class="btn-ghost full" id="gate-try">Şimdilik burada bakayım</button></div>`;
+    w.classList.add('show');
+    $('#gate-try').onclick = () => {
+      tryHere = true; try { sessionStorage.setItem('try-here', '1'); } catch (e) { /* */ }
+      db.settings.welcomed = true; save();
+      w.classList.remove('show'); w.innerHTML = ''; render();
+    };
   }
   function showWelcome() {
     const w = $('#welcome');
@@ -1081,7 +1164,6 @@
       db.settings.welcomed = true; save();
       w.classList.remove('show'); w.innerHTML = '';
       render();
-      if (isMobile() && !isStandalone()) openInstallHelp();
     };
   }
 
@@ -1126,6 +1208,18 @@
     'wipe': () => wipe(),
   };
 
+  let lastTap = { el: null, t: 0 };
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('#sheet-root.closing')) { e.stopPropagation(); e.preventDefault(); return; }
+    const b = e.target.closest('button, [data-action], a');
+    if (!b || b.matches('[data-step], .wk-arrow, .chip, .ex')) return;
+    const now = Date.now();
+    if (b === lastTap.el && now - lastTap.t < 700) { e.stopPropagation(); e.preventDefault(); return; }
+    lastTap = { el: b, t: now };
+  }, true);
+  window.addEventListener('error', () => toast('Bir şey ters gitti, tekrar dene. Kayıtların yerinde.'));
+  window.addEventListener('unhandledrejection', () => {});
+
   document.addEventListener('click', (e) => {
     if (e.target.closest('[data-close]')) { closeSheet(); setTimeout(renderInstallBar, 300); return; }
     const el = e.target.closest('[data-action]');
@@ -1157,12 +1251,28 @@
   });
   document.addEventListener('visibilitychange', () => { if (!document.hidden && !sheetOpen()) { statsCache = null; if (todayStr() !== lastDay) { ui.day = todayStr(); lastDay = todayStr(); } render(); } });
 
-  if ('serviceWorker' in navigator && /^https?:/.test(location.protocol)) navigator.serviceWorker.register('./sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && /^https?:/.test(location.protocol)) {
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloading = false, pending = false;
+    const busy = () => sheetOpen() || (document.activeElement && /INPUT|TEXTAREA/.test(document.activeElement.tagName));
+    const reload = () => { if (!reloading) { reloading = true; location.reload(); } };
+    window.__pendingReload = () => { if (pending && !busy()) reload(); };
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) return;            // ilk kurulum, yenilemeye gerek yok
+      if (busy()) pending = true; else reload();
+    });
+    document.addEventListener('visibilitychange', () => { if (document.hidden && pending) reload(); });
+    navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then((reg) => {
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+    }).catch(() => {});
+  }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
-  save();
+  if (!loadProblem) save();
   render();
-  if (!db.settings.welcomed) showWelcome();
+  if (isMobile() && !isStandalone() && !tryHere) showGate();
+  else if (!db.settings.welcomed) showWelcome();
+  if (loadProblem) setTimeout(() => toast('Kayıtlar okunamadı. Ayarlar → Yedeği geri yükle ile yedeğini açabilirsin.'), 800);
 
   window.__sezgin = { get db() { return db; }, render, handleText, openMic };
 })();

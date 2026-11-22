@@ -111,6 +111,14 @@
         }
       }
       if (date) continue;
+      // "kasımın 25'i", "aralık 3'te"
+      const mFirst = MONTHS.findIndex((m) => w.startsWith(m) && w.length - m.length <= 4);
+      const nt = toks[i + 1];
+      if (mFirst >= 0 && nt && nt.n != null && nt.mm == null && nt.n >= 1 && nt.n <= 31) {
+        let d = new Date(today.getFullYear(), mFirst, nt.n);
+        if (d < today) d = new Date(today.getFullYear() + 1, mFirst, nt.n);
+        date = d; used[i] = used[i + 1] = true; continue;
+      }
       // "25 kasım", "3 aralıkta"
       const t = toks[i];
       if (t.n != null && t.mm == null && t.n >= 1 && t.n <= 31 && nx) {
@@ -191,7 +199,7 @@
     for (let i = 0; i < toks.length; i++) {
       if (used[i]) continue;
       const w = toks[i].w.replace(/'/g, '');
-      if (w.startsWith('saç') && !w.startsWith('saçma')) { sac = true; used[i] = true; }
+      if (w.startsWith('saç') && !w.startsWith('saçma')) { sac = true; if (w.includes('sakal')) sakal = true; used[i] = true; }
       else if (w.startsWith('sakal')) { sakal = true; used[i] = true; }
       else if (['komple', 'full', 'ikisi', 'hepsi', 'ikisini', 'ikisinden', 'tam'].includes(w)) { both = true; used[i] = true; }
       else if (/^(tıraş|traş|tras|tıras)/.test(w)) { generic = true; used[i] = true; }
@@ -247,6 +255,8 @@
       if (t.n != null) continue;
       const b = baseOf(t.w);
       if (STOP.has(b) || STOP.has(t.w) || b.length < 2) continue;
+      if (MONTHS.some((m) => b.startsWith(m) && b.length - m.length <= 4)) continue;
+      if (DAY_NAMES.some(([d]) => b.startsWith(d) && b.length - d.length <= 4)) continue;
       parts.push(baseOf(t.o));
       if (parts.length >= 3) break;
     }

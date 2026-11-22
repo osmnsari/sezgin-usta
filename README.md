@@ -48,9 +48,15 @@ Kayıtlar sadece Sezgin abinin telefonunda durur; sunucu, hesap ya da ücret yok
 
 ## Güncelleme yaparsan
 
-Değişen dosyayı GitHub'da aynı yere tekrar yükle (Add file → Upload files → Commit).
-`sw.js` içindeki `SURUM` değerini bir artırmak (ör. `sezgin-usta-v2`) güncellemenin hızlı gelmesini sağlar.
+Değişen dosyaları GitHub'da tekrar yükle (Add file → Upload files → Commit).
+`sw.js` içindeki `SURUM` değerini **mutlaka** bir artır (ör. `sezgin-usta-v3` → `sezgin-usta-v4`); yoksa telefonlar yeni sürümü almaz.
+Yeni sürüm ancak bütün dosyalar sorunsuz inerse devreye girer; bir dosya eksikse eski sürüm çalışmaya devam eder.
 Sezgin abinin kayıtları güncellemeden etkilenmez.
+
+## Yapılmaması gerekenler
+
+- Depoyu (`sezgin-usta`) **silme** ya da **adını değiştirme**: ana ekrandaki ikon bu adrese bağlı.
+- Sezgin abi ana ekrandaki ikonu **silmesin**: kayıtlar ikonla birlikte silinir (önce yedek alınmalı).
 
 ## Dosyalar
 
