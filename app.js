@@ -707,26 +707,46 @@
     'Bugün boş saatim var mı?',
     'Emre gelmedi',
   ];
-  const canListen = () => !!SR && !micDenied && !kbMode;
+  const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  // iPhone'da tarayıcının doğrudan dinlemesi 1-2 kullanımdan sonra takılabiliyor.
+  // Bu yüzden iPhone'da varsayılan yol klavyenin kendi dikte (🎤) tuşu: her seferinde aynı çalışır.
+  const directMode = () => !!SR && !micDenied && !kbMode && (db.settings.directMic === true || (db.settings.directMic == null && !isIOS()));
+  const canListen = directMode;
   const KB_TEXT = 'Aşağıdaki kutuya dokun, klavyedeki 🎤 tuşuyla söyle';
   const idleText = () => canListen() ? 'Dokun ve konuş' : KB_TEXT;
 
   function micBodyHTML() {
+    const ex = `<div class="ex-title">Şöyle diyebilirsin</div>
+      <div class="examples">${EXAMPLES.map((e) => `<button class="ex" type="button" data-ex="${esc(e)}">“${esc(e)}”</button>`).join('')}</div>`;
+    if (!directMode()) {
+      return `<form class="mic-form kbf" id="mic-form">
+          <textarea id="mic-input" rows="2" placeholder="Klavyedeki 🎤 tuşuna bas ve söyle…" autocomplete="off" autocapitalize="sentences" enterkeyhint="send" aria-label="Komutu söyle ya da yaz"></textarea>
+          <button type="submit" class="btn-red big">${I.check} Gönder</button>
+        </form>
+        <div class="kb-steps"><div><b>1</b><span>Klavyedeki <span class="kmic">${I.mic}</span> tuşuna bas</span></div><div><b>2</b><span>Konuş</span></div><div><b>3</b><span>Gönder’e bas</span></div></div>
+        <details class="kb-help"><summary>Klavyede mikrofon tuşu yok mu?</summary><p>iPhone’da <b>Ayarlar → Genel → Klavye → Dikte</b>’yi aç. Mikrofon tuşu klavyenin sağ alt köşesinde ya da boşluk tuşunun yanında çıkar.</p></details>
+        ${ex}`;
+    }
     return `<div class="mic-wrap"><button class="big-mic" id="big-mic" aria-label="Konuşmaya başla">${I.mic}</button>
       <div class="mic-status" id="mic-status">${idleText()}</div><div class="mic-live" id="mic-live"></div></div>
-      <form class="mic-form" id="mic-form"><input id="mic-input" type="text" placeholder="${canListen() ? 'ya da buraya yaz…' : 'Dokun, klavyedeki 🎤 ile söyle'}" autocomplete="off" enterkeyhint="send" aria-label="Komut yaz"><button type="submit" class="btn-navy">Gönder</button></form>
-      <div class="ex-title">Şöyle diyebilirsin</div>
-      <div class="examples">${EXAMPLES.map((e) => `<button class="ex" type="button" data-ex="${esc(e)}">“${esc(e)}”</button>`).join('')}</div>`;
+      <form class="mic-form" id="mic-form"><input id="mic-input" type="text" placeholder="ya da buraya yaz…" autocomplete="off" enterkeyhint="send" aria-label="Komut yaz"><button type="submit" class="btn-navy">Gönder</button></form>
+      ${ex}`;
   }
+  const focusMicInput = () => { const i = $('#mic-input'); if (i) i.focus(); };
   function openMic(auto) {
+    const direct = directMode();
     openSheet(`<div class="sheet-head"><h2>Sesle söyle</h2><button class="x" data-close aria-label="Kapat">${I.x}</button></div><div id="mic-area">${micBodyHTML()}</div>`,
-      { cls: 'mic-sheet', onMount: () => { wireMic(); if (auto) startListen(); }, onClose: () => stopListen(false) });
+      { cls: direct ? 'mic-sheet' : 'mic-sheet kbm', onMount: () => { wireMic(); if (auto) { if (direct) startListen(); else focusMicInput(); } }, onClose: () => stopListen(false) });
   }
   function wireMic() {
     const area = $('#mic-area');
-    $('#big-mic', area).onclick = () => { if (listening) stopListen(true); else startListen(); };
-    $('#mic-form', area).onsubmit = (e) => { e.preventDefault(); const v = $('#mic-input', area).value.trim(); if (v) { $('#mic-input', area).blur(); handleText(v); } };
-    $$('.ex', area).forEach((b) => b.onclick = () => { const i = $('#mic-input', area); i.value = b.dataset.ex; i.focus(); });
+    const big = $('#big-mic', area);
+    if (big) big.onclick = () => { if (listening) stopListen(true); else startListen(); };
+    const inp = $('#mic-input', area);
+    const submit = () => { const v = inp.value.replace(/\s+/g, ' ').trim(); if (v) { inp.blur(); handleText(v); } else inp.focus(); };
+    $('#mic-form', area).onsubmit = (e) => { e.preventDefault(); submit(); };
+    inp.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); } };
+    $$('.ex', area).forEach((b) => b.onclick = () => { inp.value = b.dataset.ex; inp.focus(); });
   }
   function setStatus(t) { const s = $('#mic-status'); if (s) s.textContent = t; }
   function setLive(t) { const l = $('#mic-live'); if (l) l.textContent = t ? `“${t}”` : ''; }
@@ -822,7 +842,7 @@
     if (!area) return openMic(true);
     area.innerHTML = micBodyHTML();
     wireMic();
-    startListen();
+    if (directMode()) startListen(); else focusMicInput();
   }
 
   // Yanlış duyulan isimde (Ahmed / Ahmet, Kan / Kaan) mükerrer müşteri oluşmasın
@@ -1014,6 +1034,13 @@
         <div class="lbl">Sesle söylerken işlem belirtilmezse</div>
         <div class="chips" id="s-def">${Object.entries(s.services).map(([id, v]) => `<button class="chip ${s.defaultService === id ? 'sel' : ''}" data-id="${id}">${esc(v.name)}</button>`).join('')}</div>
       </div>
+      <h3 class="sec" style="margin-left:2px">Sesle söyleme yöntemi</h3>
+      <div class="card form-card"><p class="hint" style="margin-top:10px">${isIOS() ? 'iPhone’da en sağlam yol klavyenin 🎤 tuşu. Doğrudan dinleme iPhone’da bazen takılabilir.' : 'Doğrudan dinleme çalışmazsa klavye yöntemine geç.'}</p>
+        <div class="chips" id="s-mic">
+          <button class="chip ${directMode() ? '' : 'sel'}" data-v="0">Klavyenin 🎤 tuşu${isIOS() ? ' (önerilen)' : ''}</button>
+          <button class="chip ${directMode() ? 'sel' : ''}" data-v="1">Doğrudan dinle</button>
+        </div>
+      </div>
       <h3 class="sec" style="margin-left:2px">WhatsApp mesajları</h3>
       <div class="card form-card"><p class="hint" style="margin-top:10px">{ad}, {gün} ve {saat} kendiliğinden doldurulur.</p>
         <label class="lbl" for="s-m1">Hatırlatma</label><textarea id="s-m1" rows="3">${esc(s.msgRemind)}</textarea>
@@ -1031,7 +1058,7 @@
         <button class="btn-ghost full" data-action="show-welcome">${I.heart} Karşılama ekranını göster</button>
         <button class="btn-danger-text" data-action="wipe">${I.trash} Tüm kayıtları sil</button>
       </div>
-      <p class="footer-note">Osman’dan Sezgin abiye ♥<br><small>sürüm 3</small></p>`, {
+      <p class="footer-note">Osman’dan Sezgin abiye ♥<br><small>sürüm 4</small></p>`, {
       onMount: (sh) => {
         $('#s-start', sh).onchange = (e) => { if (e.target.value) { s.start = e.target.value.slice(0, 5); save(); render(); } };
         $('#s-end', sh).onchange = (e) => { if (e.target.value) { s.end = e.target.value.slice(0, 5); save(); render(); } };
@@ -1048,6 +1075,10 @@
         $$('#s-def [data-id]', sh).forEach((b) => b.onclick = () => {
           s.defaultService = b.dataset.id;
           $$('#s-def .chip', sh).forEach((x) => x.classList.toggle('sel', x === b)); save();
+        });
+        $$('#s-mic [data-v]', sh).forEach((b) => b.onclick = () => {
+          s.directMic = b.dataset.v === '1'; micDenied = false; kbMode = false; failCount = 0; save();
+          $$('#s-mic .chip', sh).forEach((x) => x.classList.toggle('sel', x === b));
         });
         const bindTA = (id, key) => { $(id, sh).oninput = (e) => { s[key] = e.target.value; save(); }; };
         bindTA('#s-m1', 'msgRemind'); bindTA('#s-m2', 'msgConfirm'); bindTA('#s-m3', 'msgMiss');

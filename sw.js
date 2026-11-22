@@ -2,7 +2,7 @@
    Bir dosyayı değiştirip GitHub'a yüklediğinde SURUM'u bir artır (v3 → v4).
    Yeni sürüm ancak TÜM dosyalar sorunsuz indirilirse devreye girer;
    bir dosya eksik ya da bozuksa eski sürüm çalışmaya devam eder. */
-const SURUM = 'sezgin-usta-v3';
+const SURUM = 'sezgin-usta-v4';
 const DOSYALAR = ['./', './index.html', './style.css', './app.js', './nlu.js', './manifest.webmanifest',
   './icon-180.png', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
 

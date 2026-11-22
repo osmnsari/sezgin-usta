@@ -37,7 +37,10 @@ Kayıtlar sadece Sezgin abinin telefonunda durur; sunucu, hesap ya da ücret yok
 - **Sesle:** "Yarın 3'te Ahmet saç sakal", "Cuma 10 buçukta Mehmet saç", "Ahmet'i 5'e al",
   "Kaan'ın randevusunu iptal et", "Ahmet'e not al: kenarlar 2 numara", "Yarın kimler var?",
   "Bugün boş saatim var mı?", "Emre gelmedi", "Ahmet en son ne zaman geldi?"
-- Mikrofon izin vermezse klavyedeki 🎤 tuşuyla aynı cümle yazdırılabilir.
+- iPhone'da kırmızı mikrofona basınca klavye açılır: klavyedeki 🎤 (dikte) tuşuna basıp konuşulur, sonra Gönder.
+  Bu Apple'ın kendi dikte sistemi olduğu için her seferinde aynı çalışır. (Tarayıcının doğrudan dinlemesi
+  iPhone'da 1-2 kullanımdan sonra takılabildiği için varsayılan olarak kapalı; Ayarlar'dan açılabilir.)
+- Klavyede 🎤 tuşu yoksa: iPhone Ayarlar → Genel → Klavye → Dikte açık olmalı.
 - Günlük liste, boş aralıklar (dokununca randevu yazılır), hafta şeridi.
 - Müşteri kartı: "nasıl kestirir" notu, son geliş, genelde kaç haftada bir geldiği, geçmiş.
 - "Epeydir gelmeyenler" listesi.
@@ -49,7 +52,7 @@ Kayıtlar sadece Sezgin abinin telefonunda durur; sunucu, hesap ya da ücret yok
 ## Güncelleme yaparsan
 
 Değişen dosyaları GitHub'da tekrar yükle (Add file → Upload files → Commit).
-`sw.js` içindeki `SURUM` değerini **mutlaka** bir artır (ör. `sezgin-usta-v3` → `sezgin-usta-v4`); yoksa telefonlar yeni sürümü almaz.
+`sw.js` içindeki `SURUM` değerini **mutlaka** bir artır (ör. `sezgin-usta-v4` → `sezgin-usta-v5`); yoksa telefonlar yeni sürümü almaz.
 Yeni sürüm ancak bütün dosyalar sorunsuz inerse devreye girer; bir dosya eksikse eski sürüm çalışmaya devam eder.
 Sezgin abinin kayıtları güncellemeden etkilenmez.
 
