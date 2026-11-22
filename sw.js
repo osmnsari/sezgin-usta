@@ -1,6 +1,6 @@
 /* Sezgin Usta – çevrimdışı çalışma için önbellek.
    Her güncellemede SURUM numarasını bir artır. */
-const SURUM = 'sezgin-usta-v1';
+const SURUM = 'sezgin-usta-v2';
 const DOSYALAR = ['./', './index.html', './style.css', './app.js', './nlu.js', './manifest.webmanifest', './icon-180.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {

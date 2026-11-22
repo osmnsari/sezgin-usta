@@ -659,7 +659,8 @@
 
   /* ================= MİKROFON ================= */
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let rec = null, listening = false, micDenied = false, recTimer = null;
+  let ses = null;            // açık dinleme oturumu
+  let listening = false, micDenied = false, kbMode = false, failCount = 0;
   const EXAMPLES = [
     'Yarın 3’te Ahmet saç sakal',
     'Cuma 10 buçukta Mehmet saç',
@@ -670,13 +671,14 @@
     'Bugün boş saatim var mı?',
     'Emre gelmedi',
   ];
-  const canListen = () => !!SR && !micDenied;
-  const idleText = () => canListen() ? 'Dokun ve konuş' : 'Aşağıdaki kutuya dokun, klavyedeki 🎤 tuşuyla söyle';
+  const canListen = () => !!SR && !micDenied && !kbMode;
+  const KB_TEXT = 'Aşağıdaki kutuya dokun, klavyedeki 🎤 tuşuyla söyle';
+  const idleText = () => canListen() ? 'Dokun ve konuş' : KB_TEXT;
 
   function micBodyHTML() {
     return `<div class="mic-wrap"><button class="big-mic" id="big-mic" aria-label="Konuşmaya başla">${I.mic}</button>
       <div class="mic-status" id="mic-status">${idleText()}</div><div class="mic-live" id="mic-live"></div></div>
-      <form class="mic-form" id="mic-form"><input id="mic-input" type="text" placeholder="ya da buraya yaz…" autocomplete="off" enterkeyhint="send" aria-label="Komut yaz"><button type="submit" class="btn-navy">Gönder</button></form>
+      <form class="mic-form" id="mic-form"><input id="mic-input" type="text" placeholder="${canListen() ? 'ya da buraya yaz…' : 'Dokun, klavyedeki 🎤 ile söyle'}" autocomplete="off" enterkeyhint="send" aria-label="Komut yaz"><button type="submit" class="btn-navy">Gönder</button></form>
       <div class="ex-title">Şöyle diyebilirsin</div>
       <div class="examples">${EXAMPLES.map((e) => `<button class="ex" type="button" data-ex="${esc(e)}">“${esc(e)}”</button>`).join('')}</div>`;
   }
@@ -691,51 +693,92 @@
     $$('.ex', area).forEach((b) => b.onclick = () => { const i = $('#mic-input', area); i.value = b.dataset.ex; i.focus(); });
   }
   function setStatus(t) { const s = $('#mic-status'); if (s) s.textContent = t; }
+  function setLive(t) { const l = $('#mic-live'); if (l) l.textContent = t ? `“${t}”` : ''; }
+  function micUI(on) { const b = $('#big-mic'); if (b) b.classList.toggle('on', on); }
+
+  /* iPhone'un ses tanıması bazen "bitti" sinyalini göndermiyor ya da ikinci seferde
+     hemen açılamıyor. Bu yüzden: her seferinde yeni tanıyıcı, eskisini tamamen kapat,
+     sessizlik olunca cümleyi kendimiz bitir, açılamazsa bir kez daha dene. */
+  function newRecognizer(s) {
+    const r = new SR();
+    r.lang = 'tr-TR'; r.interimResults = true; r.continuous = false; r.maxAlternatives = 1;
+    const mine = () => ses === s && s.r === r;
+    const alive = () => { if (mine()) s.alive = true; };
+    r.onstart = alive; r.onaudiostart = alive; r.onsoundstart = alive; r.onspeechstart = alive;
+    r.onresult = (e) => {
+      if (!mine()) return;
+      s.alive = true;
+      const t = Array.from(e.results).map((x) => x[0].transcript).join(' ').replace(/\s+/g, ' ').trim();
+      if (t) { s.text = t; setLive(t); }
+      const fin = e.results.length && e.results[e.results.length - 1].isFinal;
+      clearTimeout(s.quiet);
+      s.quiet = setTimeout(() => finish(s), fin ? 250 : 1500);
+    };
+    r.onerror = (e) => {
+      if (!mine()) return;
+      s.err = e.error || 'hata';
+      if (s.err === 'aborted') return;
+      if (s.err === 'not-allowed' || s.err === 'service-not-allowed') s.denied = true;
+      finish(s);
+    };
+    r.onend = () => { if (mine()) { clearTimeout(s.quiet); s.quiet = setTimeout(() => finish(s), s.text ? 0 : 150); } };
+    return r;
+  }
   function startListen() {
     if (!canListen()) {
       const i = $('#mic-input'); if (i) i.focus();
-      setStatus('Klavyedeki 🎤 tuşuna basıp söyle, sonra Gönder’e bas');
+      setStatus(micDenied ? 'Mikrofon izni yok. ' + KB_TEXT + ', sonra Gönder’e bas.' : KB_TEXT + ', sonra Gönder’e bas.');
       return;
     }
-    let text = '';
-    try {
-      rec = new SR();
-      rec.lang = 'tr-TR'; rec.interimResults = true; rec.continuous = false; rec.maxAlternatives = 1;
-      const me = rec;
-      rec.onresult = (e) => {
-        text = Array.from(e.results).map((r) => r[0].transcript).join(' ').replace(/\s+/g, ' ').trim();
-        const l = $('#mic-live'); if (l) l.textContent = text ? `“${text}”` : '';
-      };
-      rec.onerror = (e) => {
-        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { micDenied = true; setStatus('Mikrofon izni yok. Aşağıdaki kutuya dokun, klavyedeki 🎤 ile söyle.'); }
-        else if (e.error === 'no-speech') setStatus('Ses duyamadım. Tekrar dokun.');
-        else if (e.error !== 'aborted') setStatus('Olmadı. Tekrar dokun ya da yaz.');
-      };
-      rec.onend = () => {
-        clearTimeout(recTimer);
-        listening = false;
-        const b = $('#big-mic'); if (b) b.classList.remove('on');
-        if (rec === me) rec = null;
-        if (me._aborted) return;
-        if (text) handleText(text);
-        else if ($('#mic-status') && $('#mic-status').textContent === 'Dinliyorum…') setStatus(idleText());
-      };
-      rec.start();
-      listening = true;
-      $('#big-mic').classList.add('on');
-      setStatus('Dinliyorum…');
-      $('#mic-live').textContent = '';
-      recTimer = setTimeout(() => { try { me.stop(); } catch (e) { /* */ } }, 15000);
-    } catch (e) {
-      micDenied = true; listening = false;
-      setStatus('Aşağıdaki kutuya dokun, klavyedeki 🎤 ile söyle.');
+    if (ses) { ses.cancelled = true; finish(ses); }
+    const s = { text: '', err: '', alive: false, done: false };
+    ses = s;
+    let ok = false;
+    for (let tryNo = 0; tryNo < 2 && !ok; tryNo++) {
+      try { s.r = newRecognizer(s); s.r.start(); ok = true; }
+      catch (e) {
+        s.err = 'start';
+        if (s.r) { const r = s.r; s.r = null; r.onresult = r.onerror = r.onend = null; try { r.abort(); } catch (x) { /* */ } }
+      }
     }
+    if (!ok) return finish(s);
+    s.err = '';
+    listening = true; micUI(true); setStatus('Dinliyorum…'); setLive('');
+    s.watch = setTimeout(() => { if (ses === s && !s.alive) { s.err = 'açılmadı'; finish(s); } }, 4000);
+    s.max = setTimeout(() => finish(s), 15000);
+  }
+  function finish(s) {
+    if (!s || s.done) return;
+    s.done = true;
+    if (ses === s) ses = null;
+    clearTimeout(s.quiet); clearTimeout(s.watch); clearTimeout(s.max);
+    if (s.r) { const r = s.r; r.onresult = r.onerror = r.onend = r.onstart = r.onaudiostart = r.onsoundstart = r.onspeechstart = null; try { r.abort(); } catch (e) { /* */ } }
+    listening = false; micUI(false);
+    if (s.cancelled) return;
+    if (s.text) { failCount = 0; handleText(s.text); return; }
+    if (s.denied) {
+      micDenied = true;
+      const i = $('#mic-input'); if (i) i.placeholder = 'Dokun, klavyedeki 🎤 ile söyle';
+      return setStatus('Mikrofon izni yok. ' + KB_TEXT + '.');
+    }
+    if (s.err === 'no-speech' || (!s.err && s.alive)) { setStatus('Ses duyamadım. Tekrar dokun.'); return; }
+    failCount++;
+    if (failCount >= 3) {
+      kbMode = true;
+      const i = $('#mic-input'); if (i) i.placeholder = 'Dokun, klavyedeki 🎤 ile söyle';
+      return setStatus('Mikrofon şu an tepki vermiyor. ' + KB_TEXT + '.');
+    }
+    const code = s.err && !['açılmadı', 'start'].includes(s.err) ? ` (${s.err})` : '';
+    setStatus(`Mikrofon açılamadı${code}. Tekrar dokun.`);
   }
   function stopListen(byUser) {
-    if (rec) {
-      try { if (byUser) rec.stop(); else { rec._aborted = true; rec.abort(); } } catch (e) { /* */ }
-    }
-    if (!byUser) { listening = false; rec = null; }
+    const s = ses;
+    if (!s) return;
+    if (byUser) {
+      try { s.r.stop(); } catch (e) { /* */ }
+      clearTimeout(s.quiet);
+      s.quiet = setTimeout(() => finish(s), 1200);
+    } else { s.cancelled = true; finish(s); }
   }
 
   function reSay() {
@@ -930,7 +973,7 @@
         <button class="btn-ghost full" data-action="show-welcome">${I.heart} Karşılama ekranını göster</button>
         <button class="btn-danger-text" data-action="wipe">${I.trash} Tüm kayıtları sil</button>
       </div>
-      <p class="footer-note">Osman’dan Sezgin abiye ♥</p>`, {
+      <p class="footer-note">Osman’dan Sezgin abiye ♥<br><small>sürüm 2</small></p>`, {
       onMount: (sh) => {
         $('#s-start', sh).onchange = (e) => { if (e.target.value) { s.start = e.target.value.slice(0, 5); save(); render(); } };
         $('#s-end', sh).onchange = (e) => { if (e.target.value) { s.end = e.target.value.slice(0, 5); save(); render(); } };
@@ -1110,6 +1153,8 @@
     if (todayStr() !== lastDay) { if (ui.day === lastDay) ui.day = todayStr(); lastDay = todayStr(); }
     render();
   }, 60000);
+  document.addEventListener('visibilitychange', () => { if (document.hidden && ses) { ses.cancelled = true; finish(ses); setStatus(idleText()); }
+  });
   document.addEventListener('visibilitychange', () => { if (!document.hidden && !sheetOpen()) { statsCache = null; if (todayStr() !== lastDay) { ui.day = todayStr(); lastDay = todayStr(); } render(); } });
 
   if ('serviceWorker' in navigator && /^https?:/.test(location.protocol)) navigator.serviceWorker.register('./sw.js').catch(() => {});
